@@ -24,7 +24,9 @@ To sample uniformly from the union, an ellipsoid is selected with probability pr
 """
 struct MultiEllipsoid{T} <: AbstractBoundingSpace{T}
     ellipsoids::Vector{Ellipsoid{T}}
+    weights::Vector{T}  # volume fractions, cached at the first draw; emptied by `scale!`
 end
+MultiEllipsoid(ellipsoids::AbstractVector{Ellipsoid{T}}) where {T} = MultiEllipsoid{T}(ellipsoids, T[])
 MultiEllipsoid(ndims::Integer) = MultiEllipsoid(Float64, ndims)
 MultiEllipsoid(T::Type, ndims::Integer) = MultiEllipsoid([Ellipsoid(T, ndims)])
 
@@ -37,7 +39,29 @@ volume(me::MultiEllipsoid) = sum(volume, me.ellipsoids)
 
 function scale!(me::MultiEllipsoid, factor)
     scale!.(me.ellipsoids, factor)
+    empty!(me.weights)
     return me
+end
+
+# fraction of the total volume in each ellipsoid
+function volume_weights(me::MultiEllipsoid)
+    if isempty(me.weights)
+        vols = volume.(me.ellipsoids)
+        append!(me.weights, vols ./ sum(vols))
+    end
+    return me.weights
+end
+
+# index drawn with probabilities `w`: the same draw as `rand(rng, Distributions.Categorical(w))`,
+# without constructing the distribution
+function rand_index(rng::AbstractRNG, w::AbstractVector)
+    draw = rand(rng, eltype(w))
+    cp = w[1]
+    i = 1
+    while cp <= draw && i < length(w)
+        cp += w[i += 1]
+    end
+    return i
 end
 
 function fit(::Type{<:MultiEllipsoid}, x::AbstractMatrix; pointvol = 0)
@@ -93,13 +117,12 @@ distance(me::MultiEllipsoid, x::AbstractVector) = minimum(ell -> distance(ell, x
 function Base.rand(rng::AbstractRNG, me::MultiEllipsoid)
     length(me) == 1 && return rand(rng, me.ellipsoids[1])
 
-    vols = volume.(me.ellipsoids)
-    weights = vols ./ sum(vols)
+    weights = volume_weights(me)
     local x
 
     while true
         # Select random ellipsoid
-        idx = rand(rng, Categorical(weights))
+        idx = rand_index(rng, weights)
         ell = me.ellipsoids[idx]
 
         # Select point
@@ -130,6 +153,5 @@ function rand_live(rng::AbstractRNG, me::MultiEllipsoid, us)
     u = us[:, idx]
     u ∈ me || return u, nothing
     length(me) == 1 && return u, me.ellipsoids[1]
-    vols = volume.(me.ellipsoids)
-    return u, me.ellipsoids[rand(rng, Categorical(vols ./ sum(vols)))]
+    return u, me.ellipsoids[rand_index(rng, volume_weights(me))]
 end

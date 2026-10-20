@@ -14,7 +14,7 @@ using LinearAlgebra
 using Random: GLOBAL_RNG, AbstractRNG
 
 using Clustering
-using Distributions: Categorical, Uniform
+using Distributions: Uniform
 using StatsBase: mean_and_cov
 
 export AbstractBoundingSpace, rand_live, randoffset
