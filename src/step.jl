@@ -41,7 +41,8 @@ end
 
 function step(rng, model, sampler::Nested, state; kwargs...)
     ## Update bounds
-    pointvol = exp(state.logvol) / sampler.nactive
+    # expected prior volume per live point, X / nactive with X = exp(-it / nactive)
+    pointvol = exp(-state.it / sampler.nactive) / sampler.nactive
     # check if ready for first update
     if !state.has_bounds && state.ncall > sampler.min_ncall && state.it / state.ncall < sampler.min_eff
         @debug "First update: it=$(state.it), ncall=$(state.ncall), eff=$(state.it / state.ncall)"

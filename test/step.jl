@@ -1,4 +1,5 @@
 using NestedSamplers: propose
+import Random
 
 # disk of radius r around c, as a 2-d ellipsoid
 disk(c, r) = Bounds.Ellipsoid(c, diagm(fill(1 / r^2, 2)))
@@ -70,4 +71,39 @@ end
     @test first_ncall > spl.min_ncall
     @test length(gaps) ≥ 10
     @test maximum(gaps) < spl.update_interval + 100   # one iteration costs far fewer calls here
+end
+
+# unit-cube bound that records the `pointvol` it is fitted with
+struct RecordingBound <: Bounds.AbstractBoundingSpace{Float64}
+    ndims::Int
+end
+const RECORDED_POINTVOLS = Float64[]
+function NestedSamplers.Bounds.fit(::Type{RecordingBound}, x::AbstractMatrix; pointvol = 0)
+    push!(RECORDED_POINTVOLS, pointvol)
+    return RecordingBound(size(x, 1))
+end
+NestedSamplers.Bounds.scale!(b::RecordingBound, factor) = b
+Base.rand(rng::Random.AbstractRNG, b::RecordingBound) = rand(rng, b.ndims)
+Base.in(x::AbstractVector, ::RecordingBound) = true
+Base.ndims(b::RecordingBound) = b.ndims
+
+@testset "bounds are fitted with the prior volume per live point" begin
+    # `pointvol` sets the minimum volume of a fitted ellipsoid (npoints * pointvol) and the split
+    # test of MultiEllipsoid; it was X / nactive^2 instead of X / nactive.
+    model = NestedModel(x -> -sum(abs2, x .- 0.5) / 0.02, identity)
+    nlive = 100
+    spl = Nested(2, nlive; bounds=RecordingBound, proposal=Proposals.Rejection(), min_eff=1.0)
+    srng = StableRNG(3)
+    empty!(RECORDED_POINTVOLS)
+    _, state = AbstractMCMC.step(srng, model, spl)
+    checked = 0
+    for _ in 1:500   # the bound stays the unit cube, so keep X = exp(-it / nlive) moderate
+        it, nrec = state.it, length(RECORDED_POINTVOLS)
+        _, state = AbstractMCMC.step(srng, model, spl, state)
+        if length(RECORDED_POINTVOLS) > nrec
+            @test last(RECORDED_POINTVOLS) ≈ exp(-it / nlive) / nlive
+            checked += 1
+        end
+    end
+    @test checked ≥ 3
 end
