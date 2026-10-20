@@ -44,7 +44,7 @@ unitcheck(us) = all(u -> 0 < u < 1, us)
 """
     Proposals.Rejection(;maxiter=100_000)
 
-Propose a new live point by uniformly sampling within the bounding volume and rejecting samples that do not meet the likelihood constraints. This follows the original nested sampling algorithm proposed in Skilling (2004)[^1]
+Propose a new live point by uniformly sampling within the bounding volume and rejecting samples whose likelihood does not exceed the current threshold (strictly, so that a plateau in the likelihood is not resampled). This follows the original nested sampling algorithm proposed in Skilling (2004)[^1]
 
 [^1]: John Skilling, 2004, AIP 735, 395  ["Nested Sampling"](https://aip.scitation.org/doi/abs/10.1063/1.1835238)
 
@@ -71,7 +71,7 @@ function (prop::Rejection)(
         unitcheck(u) || continue
         v, logl = prior_transform_and_loglikelihood(model, u)
         ncall += 1
-        logl ≥ logl_star && return u, v, logl, ncall
+        logl > logl_star && return u, v, logl, ncall
     end
     throw(ErrorException("Couldn't generate a proper point after $(prop.maxiter) attempts including $ncall likelihood calls. Bounds=$bounds, logl_star=$logl_star."))
 end
@@ -137,7 +137,7 @@ function (prop::RWalk)(
         end
         # check proposed point
         v_prop, logl_prop = prior_transform_and_loglikelihood(model, u_prop)
-        if logl_prop ≥ logl_star
+        if logl_prop > logl_star
             u = u_walk = u_prop
             v = v_prop
             logl = logl_prop
@@ -234,7 +234,7 @@ function (prop::RStagger)(
         end 
         # check proposed point
         v_prop, logl_prop = prior_transform_and_loglikelihood(model, u_prop)
-        if logl_prop ≥ logl_star
+        if logl_prop > logl_star
             u = u_walk = u_prop
             v = v_prop
             logl = logl_prop
@@ -408,7 +408,7 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
     nexpand += 1 
 
     # stepping out left and right bounds
-    while logl_l ≥ logl_star
+    while logl_l > logl_star
         u_l .-= axis
         if unitcheck(u_l)
             v_l, logl_l = prior_transform_and_loglikelihood(model, u_l)
@@ -419,7 +419,7 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         nexpand += 1 
     end
 
-    while logl_r ≥ logl_star
+    while logl_r > logl_star
         u_r .+= axis
         if unitcheck(u_r)
             v_r, logl_r = prior_transform_and_loglikelihood(model, u_r)
@@ -452,7 +452,7 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         ncontract += 1
 
         # if success, then move to the new position
-        if logl_prop ≥ logl_star
+        if logl_prop > logl_star
             return u_prop, v_prop, logl_prop, nc, nexpand, ncontract
         # if fail, then check if the new point is to the left/right of the original point along the proposal axis and update the bounds accordingly
         else

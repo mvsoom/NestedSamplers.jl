@@ -11,8 +11,9 @@ function step(rng, model, sampler::Nested; kwargs...)
 
     # update weight and evidence; the prior volume shrinks by nactive / (nactive + 1) per
     # iteration in expectation, and L = 0 (log L = -1e300) at X = 1
-    logvol = -sampler.dlv
-    logwt, logz, h = integrate(-1e300, logl_dead, logvol, sampler.dlv, -Inf, zero(logl_dead))
+    dlv, plateau, plateau_logdvol = shrinkage(sampler, logl, logl_dead, 0.0, 0, 0.0)
+    logvol = -dlv
+    logwt, logz, h = integrate(-1e300, logl_dead, logvol, dlv, -Inf, zero(logl_dead))
 
     # sample a new live point without bounds
     point = rand(rng, eltype(us), sampler.ndims)
@@ -29,6 +30,7 @@ function step(rng, model, sampler::Nested; kwargs...)
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = 1, ncall = ncall, us = us, vs = vs, logl = logl, logl_dead = logl_dead,
              logz = logz, logzerr = sqrt(max(h, 0) / sampler.nactive), h = h, logvol = logvol,
+             plateau = plateau, plateau_logdvol = plateau_logdvol,
              since_update = since_update, has_bounds = false, active_bound = nothing)
 
     return sample, state
@@ -62,6 +64,8 @@ function step(rng, model, sampler::Nested, state; kwargs...)
     logl_dead, idx_dead = findmin(state.logl)
     u_dead = state.us[:, idx_dead]
     v_dead = state.vs[:, idx_dead]
+    dlv, plateau, plateau_logdvol = shrinkage(sampler, state.logl, logl_dead, state.logvol,
+                                              state.plateau, state.plateau_logdvol)
 
     # sample a new live point using bounds and proposal
     if has_bounds
@@ -84,13 +88,14 @@ function step(rng, model, sampler::Nested, state; kwargs...)
     since_update += nc
 
     # update weight, evidence and information
-    logvol = state.logvol - sampler.dlv
-    logwt, logz, h = integrate(state.logl_dead, logl_dead, logvol, sampler.dlv, state.logz, state.h)
+    logvol = state.logvol - dlv
+    logwt, logz, h = integrate(state.logl_dead, logl_dead, logvol, dlv, state.logz, state.h)
 
     ## prepare returns
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = it, ncall = ncall, us = state.us, vs = state.vs, logl = state.logl, logl_dead = logl_dead,
              logz = logz, logzerr = sqrt(max(h, 0) / sampler.nactive), h = h, logvol = logvol,
+             plateau = plateau, plateau_logdvol = plateau_logdvol,
              since_update = since_update, has_bounds = has_bounds, active_bound = active_bound)
 
     return sample, state
@@ -154,6 +159,25 @@ end
 ## Helpers
 
 xlogx(x) = iszero(x) ? zero(x) : x * log(x)
+
+"""
+    shrinkage(sampler, logl, logl_dead, logvol, plateau, plateau_logdvol) -> (dlv, plateau, plateau_logdvol)
+
+Decrease of ln X when the dead point at `logl_dead` is removed from the live points with
+log-likelihoods `logl`. Normally `sampler.dlv = log((N + 1) / N)`. When several live points
+share the lowest likelihood, a plateau (most often the `-1e300` stand-in for regions of zero
+likelihood), each of the `n` tied points removes an equal share X / (N + 1) of the volume, so
+that the plateau takes the fraction n / (N + 1) of it rather than 1 - exp(-n / N); as dynesty
+2.1. `plateau` counts the tied points still to be removed after this one.
+"""
+function shrinkage(sampler, logl, logl_dead, logvol, plateau, plateau_logdvol)
+    if plateau == 0
+        n = count(==(logl_dead), logl)
+        n > 1 || return sampler.dlv, 0, plateau_logdvol
+        plateau, plateau_logdvol = n, logvol - log(sampler.nactive + 1)
+    end
+    return -log1p(-exp(plateau_logdvol - logvol)), plateau - 1, plateau_logdvol
+end
 
 """
     integrate(logl_prev, logl, logvol, dlv, logz, h) -> (logwt, logz, h)
@@ -266,21 +290,26 @@ end
 
 # Add the remaining live points to `samples`, in order of increasing likelihood: after the
 # last iteration the i-th lowest of the nactive live points bounds an expected prior volume
-# X (1 - i / (nactive + 1)) (dynesty).
+# X (1 - i / (nactive + 1)). Points left on an unfinished plateau keep its equal shares of
+# volume, and the rest split what remains (dynesty).
 function add_live_points(samples, model, sampler, state)
     N = sampler.nactive
+    k = state.plateau
+    share = exp(state.plateau_logdvol - state.logvol)
+    rest = k > 0 ? log1p(-k * share) : zero(state.logvol)
+    logvols = [i ≤ k ? log1p(-i * share) : rest + log1p(-(i - k) / (N - k + 1)) for i in 1:N]
     nsamples = length(samples)
     logz, h = state.logz, state.h
     logl_prev, logvol_prev = state.logl_dead, state.logvol
     for (i, idx) in enumerate(sortperm(state.logl))
         logl = state.logl[idx]
-        logvol = state.logvol + log1p(-i / (N + 1))
+        logvol = state.logvol + logvols[i]
         logwt, logz, h = integrate(logl_prev, logl, logvol, logvol_prev - logvol, logz, h)
         logl_prev, logvol_prev = logl, logvol
         sample = (u = state.us[:, idx], v = state.vs[:, idx], logwt = logwt, logl = logl)
         samples = save!!(samples, sample, nsamples + i, model, sampler)
     end
     state = merge(state, (it = state.it + N, logl_dead = logl_prev, logz = logz,
-                          logzerr = sqrt(max(h, 0) / N), h = h, logvol = logvol_prev))
+                          logzerr = sqrt(max(h, 0) / N), h = h, logvol = logvol_prev, plateau = 0))
     return samples, state
 end
