@@ -105,12 +105,11 @@ function fit(E::Type{<:Ellipsoid{R}}, x::AbstractMatrix{S}; pointvol = 0) where 
     cov .*= ndim + 2
     # Ensure cov is nonsingular
     targetprod = (npoints * pointvol / volume_prefactor(ndim))^2
-    make_eigvals_positive!(cov, targetprod)
+    cov, F = eigvals_positive_eigen!(cov, targetprod)
 
     # get transformation matrix A = cov⁻¹ from the eigendecomposition, with the condition number of cov capped
     # at 1e12 (as dynesty does), so that A is symmetric positive definite even when the points (nearly) span a
     # lower-dimensional subspace. If cov is all zeros, A is zero, as `pinv` gave before.
-    F = eigen(Symmetric(cov))
     λmax = maximum(F.values)
     A = λmax > 0 ? Matrix(Symmetric(F.vectors * Diagonal(inv.(max.(F.values, λmax / 1e12))) * F.vectors')) : zero(cov)
 
@@ -172,16 +171,19 @@ function randball(rng::AbstractRNG, T::Type, D::Integer)
     return z
 end
 
-function make_eigvals_positive!(cov::AbstractMatrix, targetprod)
+make_eigvals_positive!(cov::AbstractMatrix, targetprod) = first(eigvals_positive_eigen!(cov, targetprod))
+
+# `make_eigvals_positive!` that also returns the eigendecomposition of the result, reusing the
+# first one when no eigenvalue needed fixing (the usual case).
+function eigvals_positive_eigen!(cov::AbstractMatrix, targetprod)
     E = eigen(Symmetric(cov))
     mask = E.values .< 1e-10
-    if any(mask)
-        nzprod = prod(E.values[.!mask])
-        nzeros = count(mask)
-        E.values[mask] .= (targetprod / nzprod)^(1 / nzeros)
-        cov .= Symmetric(E.vectors * Diagonal(E.values) * E.vectors')  # keep cov exactly symmetric
-    end
-    return cov
+    any(mask) || return cov, E
+    nzprod = prod(E.values[.!mask])
+    nzeros = count(mask)
+    E.values[mask] .= (targetprod / nzprod)^(1 / nzeros)
+    cov .= Symmetric(E.vectors * Diagonal(E.values) * E.vectors')  # keep cov exactly symmetric
+    return cov, eigen(Symmetric(cov))
 end
 
 make_eigvals_positive(cov::AbstractMatrix, targetprod) = make_eigvals_positive!(copy(cov), targetprod)
