@@ -2,7 +2,7 @@
 function step(rng, model, sampler::Nested; kwargs...)
     # Initialize particles
     # us are in unit space, vs are in prior space
-    us, vs, logl = init_particles(rng, model, sampler)
+    us, vs, logl, ninit = init_particles(rng, model, sampler)
 
     # Find least likely point
     logl_dead, idx_dead = findmin(logl)
@@ -25,7 +25,8 @@ function step(rng, model, sampler::Nested; kwargs...)
     vs[:, idx_dead] .= v
     logl[idx_dead] = ll
 
-    ncall = since_update = nc
+    ncall = ninit + nc   # like dynesty, count the evaluations of the initial live points
+    since_update = nc
 
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = 1, ncall = ncall, us = us, vs = vs, logl = logl, logl_dead = logl_dead,
@@ -272,7 +273,7 @@ init_particles(rng, model, sampler) =
     init_particles(rng, sampler.ndims, sampler.nactive, model)
 
 # loop and fill arrays, checking validity of points
-# will retry 100 times before erroring
+# will retry 100 times before erroring; also returns the number of likelihood evaluations
 function init_particles(rng, T, ndims, nactive, model)
     us = rand(rng, T, ndims, nactive)
     vs_and_logl = mapslices(
@@ -299,7 +300,7 @@ function init_particles(rng, T, ndims, nactive, model)
     # force -Inf to be a finite but small number to keep estimators from breaking
     @. logl[logl == -Inf] = -1e300
 
-    return us, vs, logl
+    return us, vs, logl, ntries * nactive
 end
 
 

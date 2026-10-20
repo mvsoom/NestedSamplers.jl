@@ -61,8 +61,9 @@ end
     chains, state = sample(rng, model, spl; add_live=false, maxiter=3)
     @test state.it == 3
 
-    chains, state = sample(rng, model, spl; add_live=false, maxcall=10)
-    @test state.ncall == 10
+    # ncall includes the nactive evaluations of the initial live points
+    chains, state = sample(rng, model, spl; add_live=false, maxcall=spl.nactive + 10)
+    @test state.ncall == spl.nactive + 10
 
     chains, state = sample(rng, model, spl; add_live=false, maxlogl=0.2)
     @test state.logl[1] ≥ 0.2

@@ -392,19 +392,19 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
     u_l = @. u - r * axis  # left bound
     if unitcheck(u_l)
         v_l, logl_l = prior_transform_and_loglikelihood(model, u_l)
+        nc += 1  # count likelihood evaluations only
     else
         logl_l = -Inf
     end
-    nc += 1
     nexpand += 1 
 
     u_r = u_l .+ axis # right bound
     if unitcheck(u_r)
         v_r, logl_r = prior_transform_and_loglikelihood(model, u_r)
+        nc += 1  # count likelihood evaluations only
     else
         logl_r = -Inf
-    end    
-    nc += 1
+    end
     nexpand += 1 
 
     # stepping out left and right bounds
@@ -412,10 +412,10 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         u_l .-= axis
         if unitcheck(u_l)
             v_l, logl_l = prior_transform_and_loglikelihood(model, u_l)
+            nc += 1  # count likelihood evaluations only
         else
             logl_l = -Inf
         end
-        nc += 1
         nexpand += 1 
     end
 
@@ -423,10 +423,10 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         u_r .+= axis
         if unitcheck(u_r)
             v_r, logl_r = prior_transform_and_loglikelihood(model, u_r)
+            nc += 1  # count likelihood evaluations only
         else
             logl_r = -Inf
         end
-        nc += 1
         nexpand += 1 
     end
 
@@ -445,10 +445,10 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         u_prop = @. u_l + r * u_hat
         if unitcheck(u_prop)
             v_prop, logl_prop = prior_transform_and_loglikelihood(model, u_prop)
+            nc += 1  # count likelihood evaluations only
         else
             logl_prop = -Inf
         end
-        nc += 1
         ncontract += 1
 
         # if success, then move to the new position

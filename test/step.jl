@@ -147,3 +147,14 @@ end
     @test final.it == 250
     @test sum(s -> exp(s.logwt - final.logz), samples) ≈ 1 atol = 1e-8
 end
+
+@testset "ncall counts every likelihood evaluation - $(nameof(typeof(prop)))" for prop in (
+    Proposals.Rejection(), Proposals.RWalk(), Proposals.RStagger(), Proposals.Slice(), Proposals.RSlice()
+)
+    # the initial live points were not counted, and slice proposals counted attempts outside
+    # the unit cube, where the likelihood is not evaluated
+    n = Ref(0)
+    model = NestedModel(x -> (n[] += 1; -sum(abs2, x .- 0.5) / 0.02), identity)
+    _, state = sample(StableRNG(1), model, Nested(2, 100; proposal=prop); dlogz=0.5, progress=false, chain_type=Array)
+    @test state.ncall == n[]
+end
