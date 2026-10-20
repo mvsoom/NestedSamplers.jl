@@ -10,6 +10,7 @@ struct Nested{B, P <: AbstractProposal} <: AbstractSampler
     min_eff::Float64
     proposal::P
     dlv::Float64
+    bootstrap::Int
 end
 
 """
@@ -17,6 +18,7 @@ end
         bounds=Bounds.MultiEllipsoid,
         proposal=:auto,
         enlarge=1.25,
+        bootstrap=0,
         update_interval=default_update_interval(proposal, ndims),
         min_ncall=2nactive,
         min_eff=0.10)
@@ -36,6 +38,12 @@ The original nested sampling algorithm is roughly equivalent to using `Bounds.El
 
 ## Other Parameters
 * `enlarge` - When fitting the bounds to live points, they will be enlarged (in terms of volume) by this linear factor.
+* `bootstrap` - If positive, each fitted bound is first expanded by the factor that makes it contain the live points
+  left out of `bootstrap` resamples of them (see [`Bounds.bootstrap_expand`](@ref)), as dynesty does by default for
+  uniform sampling (with `bootstrap=5, enlarge=1`). This adapts to how well the bound fits, but a single factor is
+  applied to all ellipsoids, and a small or needle-shaped cluster can make it huge (a factor 19 in 5 dimensions, a
+  volume 10^6 times larger), after which rejection sampling stalls. The default `bootstrap=0, enlarge=1.25` with the
+  MultiEllipsoid splitting rule was unbiased on the test problems; use bootstrapping as a check.
 * `update_interval` - How often to refit the live points with the bounds as a fraction of `nactive`. By default this will be determined using `default_update_interval` for the given proposal
     * `Proposals.Rejection` - `1.5`
     * `Proposals.RWalk` and `Proposals.RStagger` - `0.15 * walks`
@@ -51,6 +59,7 @@ function Nested(ndims,
     bounds = Bounds.MultiEllipsoid,
     proposal = :auto,
     enlarge = 1.25,
+    bootstrap = 0,
     min_ncall=2nactive,
     min_eff=0.10,
     kwargs...)
@@ -80,7 +89,8 @@ function Nested(ndims,
         min_ncall,
         min_eff,
         proposal,
-        dlv)
+        dlv,
+        bootstrap)
 end
 
 default_update_interval(p::Proposals.Rejection, ndims) = 1.5

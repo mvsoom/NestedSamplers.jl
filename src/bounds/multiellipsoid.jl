@@ -87,6 +87,9 @@ end
 
 Base.in(x::AbstractVector, me::MultiEllipsoid) = any(ell->x ∈ ell, me.ellipsoids)
 
+# normalized distance to the nearest ellipsoid (≤ 1 inside the union)
+distance(me::MultiEllipsoid, x::AbstractVector) = minimum(ell -> distance(ell, x), me.ellipsoids)
+
 function Base.rand(rng::AbstractRNG, me::MultiEllipsoid)
     length(me) == 1 && return rand(rng, me.ellipsoids[1])
 

@@ -46,14 +46,14 @@ function step(rng, model, sampler::Nested, state; kwargs...)
     # check if ready for first update
     if !state.has_bounds && state.ncall > sampler.min_ncall && state.it / state.ncall < sampler.min_eff
         @debug "First update: it=$(state.it), ncall=$(state.ncall), eff=$(state.it / state.ncall)"
-        active_bound = Bounds.scale!(Bounds.fit(sampler.bounds, state.us, pointvol=pointvol), sampler.enlarge)
+        active_bound = fit_bound(rng, sampler, state.us, pointvol)
         since_update = 0
         has_bounds = true
     # if accepted first update, is it time to update again? `since_update` counts likelihood
     # calls, which grow by more than one per iteration, so compare rather than test divisibility.
     elseif state.has_bounds && state.since_update ≥ sampler.update_interval
         @debug "Updating bounds: it=$(state.it), ncall=$(state.ncall), eff=$(state.it / state.ncall)"
-        active_bound = Bounds.scale!(Bounds.fit(sampler.bounds, state.us, pointvol=pointvol), sampler.enlarge)
+        active_bound = fit_bound(rng, sampler, state.us, pointvol)
         since_update = 0
         has_bounds = true
     else
@@ -165,6 +165,21 @@ end
 ## Helpers
 
 """
+    fit_bound(rng, sampler, us, pointvol)
+
+Fit `sampler.bounds` to the live points `us`, expand it by the bootstrap factor (if
+`sampler.bootstrap > 0`), and enlarge its volume by `sampler.enlarge`.
+"""
+function fit_bound(rng, sampler, us, pointvol)
+    bound = Bounds.fit(sampler.bounds, us; pointvol=pointvol)
+    if sampler.bootstrap > 0
+        expand = Bounds.bootstrap_expand(rng, sampler.bounds, us, sampler.bootstrap; pointvol=pointvol)
+        expand > 1 && Bounds.scale!(bound, expand^size(us, 1))
+    end
+    return Bounds.scale!(bound, sampler.enlarge)
+end
+
+"""
     propose(rng, proposal, sampler, bound, us, logl, u_dead, logl_dead, model, pointvol)
         -> (u, v, logl, ncall, bound, refit)
 
@@ -186,7 +201,7 @@ function propose(rng, proposal, sampler, bound, us, logl, u_dead, logl_dead, mod
     refit = isnothing(prop_bound)
     if refit
         # live point not inside active bounds: refit them
-        bound = Bounds.scale!(Bounds.fit(sampler.bounds, us, pointvol=pointvol), sampler.enlarge)
+        bound = fit_bound(rng, sampler, us, pointvol)
         point, prop_bound = rand_live(rng, bound, point[:, :])
     end
     u, v, logl, nc = proposal(rng, point, logl_dead, prop_bound, model)

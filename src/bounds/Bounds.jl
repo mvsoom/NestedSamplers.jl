@@ -65,6 +65,37 @@ function rand_live(rng::AbstractRNG, B::AbstractBoundingSpace, us)
 end
 rand_live(B::AbstractBoundingSpace, us) = rand_live(GLOBAL_RNG, B, us)
 
+"""
+    Bounds.bootstrap_expand(rng, B, points, nboot; pointvol=0)
+
+Linear expansion factor (≥ 1) for a bound of type `B` fitted to `points`, estimated by
+bootstrapping as in dynesty: fit the bound to a resample (with replacement) of the points and
+take the largest normalized distance (see `distance`) of a left-out point from it, maximized
+over `nboot` resamples. A bound fitted to a finite sample is smaller than the region the sample
+was drawn from; scaled by this factor it covers that region. Returns 1 for `nboot = 0`.
+"""
+function bootstrap_expand(rng::AbstractRNG, B, points::AbstractMatrix, nboot::Integer; pointvol = 0)
+    npoints = size(points, 2)
+    expand = one(float(eltype(points)))
+    selected = falses(npoints)
+    for _ in 1:nboot
+        fill!(selected, false)
+        for _ in 1:npoints
+            selected[rand(rng, 1:npoints)] = true
+        end
+        # keep at least two points in and one out (dynesty)
+        nin = count(selected)
+        nin < 2 && (selected[1:2] .= true)
+        nin == npoints && (selected[1] = false)
+        bound = fit(B, points[:, selected]; pointvol = pointvol)
+        for j in 1:npoints
+            selected[j] && continue
+            expand = max(expand, distance(bound, view(points, :, j)))
+        end
+    end
+    return expand
+end
+
 function Base.show(io::IO, bound::B) where {T,B <: AbstractBoundingSpace{T}}
     base = nameof(B) |> string
     print(io, "$base{$T}(ndims=$(ndims(bound)))")
@@ -98,6 +129,7 @@ fit(::Type{<:NoBounds}, points::AbstractMatrix{T}; kwargs...) where T =
 scale!(b::NoBounds, factor) = b
 volume(::NoBounds{T}) where {T} = one(T)
 axes(b::NoBounds{T}) where {T} = Diagonal(ones(T, b.ndims))
+distance(::NoBounds, x) = zero(eltype(x))
 
 include("ellipsoid.jl")
 include("multiellipsoid.jl")

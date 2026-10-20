@@ -107,3 +107,11 @@ Base.ndims(b::RecordingBound) = b.ndims
     end
     @test checked ≥ 3
 end
+
+@testset "bootstrap-expanded bounds" begin
+    model, lnZ = Models.CorrelatedGaussian(3)
+    spl = Nested(3, 300; bootstrap=5, enlarge=1.0)
+    @test spl.bootstrap == 5
+    _, state = sample(StableRNG(5), model, spl; dlogz=0.1, progress=false, chain_type=Array)
+    @test state.logz ≈ lnZ atol = 4state.logzerr
+end

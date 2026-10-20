@@ -77,6 +77,9 @@ function Base.in(x::AbstractVector, ell::Ellipsoid)
     return dot(d, ell.A * d) ≤ 1.0
 end
 
+# Normalized distance of `x` from the center: 1 on the surface, < 1 inside.
+distance(ell::Ellipsoid, x::AbstractVector) = (d = x .- ell.center; sqrt(dot(d, ell.A * d)))
+
 randoffset(rng::AbstractRNG, ell::Ellipsoid{T}) where {T} = axes(ell) * randball(rng, T, ndims(ell))
 Base.rand(rng::AbstractRNG, ell::Ellipsoid) = ell.center .+ randoffset(rng, ell)
 

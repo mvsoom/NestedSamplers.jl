@@ -91,3 +91,27 @@ end
     blob(c, n) = reduce(hcat, c .+ 0.05 .* NestedSamplers.Bounds.randball(rng, Float64, d) for _ in 1:n)
     @test length(fit(MultiEllipsoid, hcat(blob(0.3, 200), blob(0.7, 200)))) == 2
 end
+
+@testset "bootstrap expansion" begin
+    # 30 uniform points in a 3-d ball: the fitted ellipsoid misses part of the ball; expanded by
+    # the bootstrap factor it covers nearly all of it.
+    ball(n) = reduce(hcat, NestedSamplers.Bounds.randball(rng, Float64, 3) for _ in 1:n)
+    @test Bounds.bootstrap_expand(rng, Ellipsoid, ball(30), 0) == 1
+    covered, covered_boot = Float64[], Float64[]
+    for _ in 1:20
+        x = ball(30)
+        ell = fit(Ellipsoid, x)
+        y = ball(2000)
+        push!(covered, count(j -> y[:, j] ∈ ell, axes(y, 2)) / 2000)
+        expand = Bounds.bootstrap_expand(rng, Ellipsoid, x, 5)
+        @test expand ≥ 1
+        scale!(ell, expand^3)
+        push!(covered_boot, count(j -> y[:, j] ∈ ell, axes(y, 2)) / 2000)
+    end
+    @test mean(covered) < 0.95
+    @test mean(covered_boot) > 0.99
+    # distances: 1 on the surface of an ellipsoid, the nearest ellipsoid for a MultiEllipsoid
+    ell = Ellipsoid([0.0, 0.0], diagm([1 / 4, 1.0]))
+    @test Bounds.distance(ell, [2.0, 0.0]) ≈ 1
+    @test Bounds.distance(MultiEllipsoid([ell, Ellipsoid([5.0, 0.0], diagm([1.0, 1.0]))]), [5.5, 0.0]) ≈ 0.5
+end
