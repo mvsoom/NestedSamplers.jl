@@ -69,3 +69,25 @@ end # testset
         @test issymmetric(ell.A)
     end
 end
+
+@testset "MultiEllipsoid covers a curved region" begin
+    # Uniform points in a sheared 5-d ball (a banana). The earlier split rule cut these 400 points
+    # into about 20 clusters whose ellipsoids covered 87% of the region (71% at worst), which made
+    # rejection sampling overestimate ln Z; the dynesty rule uses a few and covers > 99%.
+    d, a = 5, 2.0
+    s = [0.05, 0.05, 0.05, 0.05, 0.004]
+    banana(n) = reduce(hcat, begin
+        z = randn(rng, d); z .*= 3 .* rand(rng)^(1 / d) ./ norm(z)
+        u = 0.5 .+ s .* z; u[d] += a * (u[1] - 0.5)^2; u
+    end for _ in 1:n)
+    for _ in 1:5
+        bound = scale!(fit(MultiEllipsoid, banana(400)), 1.25)
+        y = banana(4000)
+        @test count(j -> y[:, j] ∈ bound, axes(y, 2)) / 4000 > 0.98
+        @test length(bound) ≤ 6
+    end
+
+    # well-separated clusters are still split
+    blob(c, n) = reduce(hcat, c .+ 0.05 .* NestedSamplers.Bounds.randball(rng, Float64, d) for _ in 1:n)
+    @test length(fit(MultiEllipsoid, hcat(blob(0.3, 200), blob(0.7, 200)))) == 2
+end
