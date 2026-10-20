@@ -98,10 +98,11 @@ Base.ndims(b::RecordingBound) = b.ndims
     _, state = AbstractMCMC.step(srng, model, spl)
     checked = 0
     for _ in 1:500   # the bound stays the unit cube, so keep X = exp(-it / nlive) moderate
-        it, nrec = state.it, length(RECORDED_POINTVOLS)
+        it, logvol, nrec = state.it, state.logvol, length(RECORDED_POINTVOLS)
         _, state = AbstractMCMC.step(srng, model, spl, state)
+        @test logvol ≈ -it * log((nlive + 1) / nlive)   # ln X, shrinking by N / (N + 1) per iteration
         if length(RECORDED_POINTVOLS) > nrec
-            @test last(RECORDED_POINTVOLS) ≈ exp(-it / nlive) / nlive
+            @test last(RECORDED_POINTVOLS) ≈ exp(logvol) / nlive
             checked += 1
         end
     end
@@ -114,4 +115,35 @@ end
     @test spl.bootstrap == 5
     _, state = sample(StableRNG(5), model, spl; dlogz=0.1, progress=false, chain_type=Array)
     @test state.logz ≈ lnZ atol = 4state.logzerr
+end
+
+@testset "evidence integration" begin
+    # one trapezoid step: shell between X = 1 and X = N / (N + 1) with L = 1 and L = 3
+    N = 10
+    dlv = log((N + 1) / N)
+    logwt, logz, h = NestedSamplers.integrate(0.0, log(3), -dlv, dlv, -Inf, 0.0)
+    @test exp(logwt) ≈ (1 + 3) / 2 * (1 - N / (N + 1))
+    @test logz ≈ logwt
+    # H = ∫ L log L dX / Z - ln Z for the trapezoid shell
+    @test h ≈ (log(3) * 3 / 4) - logz
+    # zero likelihood at both edges: weight 0 and finite information
+    logwt, logz, h = NestedSamplers.integrate(-1e300, -1e300, -dlv, dlv, -Inf, 0.0)
+    @test h == 0
+
+    # the remaining live points are added in order of increasing likelihood
+    model, lnZ = Models.CorrelatedGaussian(2)
+    spl = Nested(2, 50)
+    srng = StableRNG(9)
+    smp, state = AbstractMCMC.step(srng, model, spl)
+    samples = AbstractMCMC.samples(smp, model, spl)
+    samples = AbstractMCMC.save!!(samples, smp, 1, model, spl)
+    for i in 2:200
+        smp, state = AbstractMCMC.step(srng, model, spl, state)
+        samples = AbstractMCMC.save!!(samples, smp, i, model, spl)
+    end
+    samples, final = NestedSamplers.add_live_points(samples, model, spl, state)
+    added = [s.logl for s in samples[201:end]]
+    @test length(added) == 50 && issorted(added)
+    @test final.it == 250
+    @test sum(s -> exp(s.logwt - final.logz), samples) ≈ 1 atol = 1e-8
 end

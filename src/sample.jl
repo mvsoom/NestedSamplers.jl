@@ -22,7 +22,7 @@ function nested_isdone(rng, model, sampler, samples, state, i; progress=true, ma
     # 2) number of loglike calls has been exceeded
     done_sampling |= state.ncall ≥ maxcall
     # 3) remaining fractional log-evidence below threshold
-    logz_remain = maximum(state.logl) - state.it / sampler.nactive
+    logz_remain = maximum(state.logl) + state.logvol
     delta_logz = logaddexp(state.logz, logz_remain) - state.logz
     done_sampling |= delta_logz ≤ dlogz
     # 4) last dead point loglikelihood exceeds threshold

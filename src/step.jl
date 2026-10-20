@@ -9,9 +9,10 @@ function step(rng, model, sampler::Nested; kwargs...)
     u_dead = us[:, idx_dead]
     v_dead = vs[:, idx_dead]
 
-    # update weight using trapezoidal rule
-    logvol = log1mexp(-1 / sampler.nactive)
-    logwt = logl_dead + logvol
+    # update weight and evidence; the prior volume shrinks by nactive / (nactive + 1) per
+    # iteration in expectation, and L = 0 (log L = -1e300) at X = 1
+    logvol = -sampler.dlv
+    logwt, logz, h = integrate(-1e300, logl_dead, logvol, sampler.dlv, -Inf, zero(logl_dead))
 
     # sample a new live point without bounds
     point = rand(rng, eltype(us), sampler.ndims)
@@ -25,15 +26,9 @@ function step(rng, model, sampler::Nested; kwargs...)
 
     ncall = since_update = nc
 
-    # update evidence and information
-    logz = logwt
-    h = logl_dead - logz
-    logzerr = sqrt(h / sampler.nactive)
-    logvol -= 1 / sampler.nactive
-
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = 1, ncall = ncall, us = us, vs = vs, logl = logl, logl_dead = logl_dead,
-             logz = logz, logzerr = logzerr, h = h, logvol = logvol,
+             logz = logz, logzerr = sqrt(max(h, 0) / sampler.nactive), h = h, logvol = logvol,
              since_update = since_update, has_bounds = false, active_bound = nothing)
 
     return sample, state
@@ -41,8 +36,8 @@ end
 
 function step(rng, model, sampler::Nested, state; kwargs...)
     ## Update bounds
-    # expected prior volume per live point, X / nactive with X = exp(-it / nactive)
-    pointvol = exp(-state.it / sampler.nactive) / sampler.nactive
+    # expected prior volume per live point, X / nactive
+    pointvol = exp(state.logvol) / sampler.nactive
     # check if ready for first update
     if !state.has_bounds && state.ncall > sampler.min_ncall && state.it / state.ncall < sampler.min_eff
         @debug "First update: it=$(state.it), ncall=$(state.ncall), eff=$(state.it / state.ncall)"
@@ -88,20 +83,14 @@ function step(rng, model, sampler::Nested, state; kwargs...)
     ncall = state.ncall + nc
     since_update += nc
 
-    # update weight
-    logwt = state.logvol + logl_dead
-
-    # update evidence and information
-    logz = logaddexp(state.logz, logwt)
-    h = (exp(logwt - logz) * logl_dead +
-         exp(state.logz - logz) * (state.h + state.logz) - logz)
-    logzerr = h ≥ 0 ? sqrt(h / sampler.nactive) : NaN
-    logvol = state.logvol - 1 / sampler.nactive
+    # update weight, evidence and information
+    logvol = state.logvol - sampler.dlv
+    logwt, logz, h = integrate(state.logl_dead, logl_dead, logvol, sampler.dlv, state.logz, state.h)
 
     ## prepare returns
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = it, ncall = ncall, us = state.us, vs = state.vs, logl = state.logl, logl_dead = logl_dead,
-             logz = logz, logzerr = logzerr, h = h, logvol = logvol,
+             logz = logz, logzerr = sqrt(max(h, 0) / sampler.nactive), h = h, logvol = logvol,
              since_update = since_update, has_bounds = has_bounds, active_bound = active_bound)
 
     return sample, state
@@ -163,6 +152,35 @@ function bundle_samples(samples,
 end
 
 ## Helpers
+
+xlogx(x) = iszero(x) ? zero(x) : x * log(x)
+
+"""
+    integrate(logl_prev, logl, logvol, dlv, logz, h) -> (logwt, logz, h)
+
+One step of the evidence integral with the trapezoid rule, as in dynesty: the shell between
+log prior volumes `logvol + dlv` and `logvol`, with log-likelihoods `logl_prev` and `logl` at
+its edges, has weight `(L_prev + L) (X_prev - X) / 2`. Returns its log weight and the updated
+ln Z and information H.
+
+Follows PR #80 by Miles Lucas. ln Z enters the update of H only through differences (after
+Jose Vines), so a dead point at the `-1e300` stand-in for zero likelihood does not inflate H.
+The uncertainty of ln Z is Skilling's sqrt(H / nactive); dynesty's running sum of `ΔH dlv`
+can turn negative while the final live points are added.
+"""
+function integrate(logl_prev, logl, logvol, dlv, logz, h)
+    logdvol = logvol + log(expm1(dlv)) - log(2)
+    logwt = logaddexp(logl_prev, logl) + logdvol
+    logz_new = logaddexp(logz, logwt)
+    a = exp(logz - logz_new)                # Z_old / Z_new
+    b = -expm1(logz - logz_new)             # shell weight / Z_new
+    # mean log-likelihood over the shell, with weights normalized explicitly
+    m = max(logl_prev, logl)
+    w_prev, w = exp(logl_prev - m), exp(logl - m)
+    lbar = (w_prev * logl_prev + w * logl) / (w_prev + w)
+    h_new = a * h + xlogx(a) + b * (lbar - logz_new)
+    return logwt, logz_new, h_new
+end
 
 """
     fit_bound(rng, sampler, us, pointvol)
@@ -246,38 +264,23 @@ function init_particles(rng, T, ndims, nactive, model)
 end
 
 
-# add remaining live points to `samples`
+# Add the remaining live points to `samples`, in order of increasing likelihood: after the
+# last iteration the i-th lowest of the nactive live points bounds an expected prior volume
+# X (1 - i / (nactive + 1)) (dynesty).
 function add_live_points(samples, model, sampler, state)
-    logvol = -state.it / sampler.nactive - log(sampler.nactive)
-
-    prev_logz = state.logz
-    prev_h = state.h
-
-    local logl, logz, h, logzerr 
-    N = length(samples)
-
-    @inbounds for (i, idx) in enumerate(eachindex(state.logl))
-        # get new point
-        u = state.us[:, idx]
-        v = state.vs[:, idx]
+    N = sampler.nactive
+    nsamples = length(samples)
+    logz, h = state.logz, state.h
+    logl_prev, logvol_prev = state.logl_dead, state.logvol
+    for (i, idx) in enumerate(sortperm(state.logl))
         logl = state.logl[idx]
-
-        # update sampler
-        logwt = logvol + logl
-        logz = logaddexp(prev_logz, logwt)
-        h = (exp(logwt - logz) * logl +
-             exp(prev_logz - logz) * (prev_h + prev_logz) - logz)
-        logzerr = sqrt(h / sampler.nactive)
-
-        prev_logz = logz
-        prev_h = h
-
-        sample = (u = u, v = v, logwt = logwt, logl = logl)
-        save!!(samples, sample, N + i, model, sampler)
+        logvol = state.logvol + log1p(-i / (N + 1))
+        logwt, logz, h = integrate(logl_prev, logl, logvol, logvol_prev - logvol, logz, h)
+        logl_prev, logvol_prev = logl, logvol
+        sample = (u = state.us[:, idx], v = state.vs[:, idx], logwt = logwt, logl = logl)
+        samples = save!!(samples, sample, nsamples + i, model, sampler)
     end
-
-    state = (it = state.it + sampler.nactive, us = state.us, vs = state.vs, logl = logl,
-            logz = logz, logzerr = logzerr, logvol = logvol,
-            since_update = state.since_update, has_bounds = state.has_bounds, active_bound = state.active_bound)
+    state = merge(state, (it = state.it + N, logl_dead = logl_prev, logz = logz,
+                          logzerr = sqrt(max(h, 0) / N), h = h, logvol = logvol_prev))
     return samples, state
 end

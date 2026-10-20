@@ -28,8 +28,10 @@ end
     priors = [Uniform(-1, 1)]
     model = NestedModel(logl, priors)
     spl = Nested(1, 500)
-    chains, _ = sample(rng, model, spl; param_names=["x"])
+    chains, state = sample(rng, model, spl; param_names=["x"])
     @test all(>(0), chains[:x][chains[:weights] .> 1e-10])
+    # live points at the -1e300 stand-in for log(0) must not blow up the information
+    @test 0 < state.logzerr < 0.1
 end
 
 @testset "Stopping criterion" begin

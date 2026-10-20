@@ -13,7 +13,7 @@ import AbstractMCMC: step,
                      bundle_samples,
                      mcmcsample
 using Distributions: quantile, UnivariateDistribution
-using LogExpFunctions: logaddexp, log1mexp
+using LogExpFunctions: logaddexp
 using MCMCChains: Chains
 using ProgressLogging
 import StatsBase
