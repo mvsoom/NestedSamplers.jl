@@ -69,7 +69,7 @@ function step(rng, model, sampler::Nested, state; kwargs...)
     # sample a new live point using bounds and proposal
     if has_bounds
         u, v, logl, nc, active_bound, refit = propose(rng, sampler.proposal, sampler, active_bound,
-                                                      state.us, u_dead, logl_dead, model, pointvol)
+                                                      state.us, state.logl, u_dead, logl_dead, model, pointvol)
         refit && (since_update = 0)
     else
         point = rand(rng, eltype(state.us), sampler.ndims)
@@ -163,22 +163,24 @@ end
 ## Helpers
 
 """
-    propose(rng, proposal, sampler, bound, us, u_dead, logl_dead, model, pointvol)
+    propose(rng, proposal, sampler, bound, us, logl, u_dead, logl_dead, model, pointvol)
         -> (u, v, logl, ncall, bound, refit)
 
 Draw a replacement for the dead point with `proposal` inside `bound`. Returns the new point
 in unit and prior space, its log-likelihood, the number of likelihood calls, and the bound,
 which is refitted (`refit = true`) when the start point of an MCMC proposal lies outside it.
 """
-function propose(rng, proposal::Proposals.Rejection, sampler, bound, us, u_dead, logl_dead, model, pointvol)
+function propose(rng, proposal::Proposals.Rejection, sampler, bound, us, logl, u_dead, logl_dead, model, pointvol)
     # Rejection sampling draws uniformly from the whole bound: for `MultiEllipsoid`, the union
     # of the ellipsoids, with the 1/q overlap correction in `rand`. It needs no start point.
     u, v, logl, nc = proposal(rng, u_dead, logl_dead, bound, model)
     return u, v, logl, nc, bound, false
 end
 
-function propose(rng, proposal, sampler, bound, us, u_dead, logl_dead, model, pointvol)
-    point, prop_bound = rand_live(rng, bound, us)
+function propose(rng, proposal, sampler, bound, us, logl, u_dead, logl_dead, model, pointvol)
+    # start from a live point strictly above the threshold, not from the dead point (as dynesty)
+    above = findall(>(logl_dead), logl)
+    point, prop_bound = rand_live(rng, bound, isempty(above) ? us : view(us, :, above))
     refit = isnothing(prop_bound)
     if refit
         # live point not inside active bounds: refit them

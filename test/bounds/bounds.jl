@@ -70,7 +70,9 @@ end
     count(point ∈ x[:, i] for i in axes(x, 2)) == 1
     Btarget = B ∈ [Bounds.MultiEllipsoid] ? Bounds.Ellipsoid : B
     @test _bound isa Btarget
-    @test point ∈ _bound && point ∈ bound
+    @test point ∈ bound
+    # a MultiEllipsoid returns one of its ellipsoids, chosen by volume, not by containing the point
+    @test B == Bounds.MultiEllipsoid ? any(e -> e === _bound, bound.ellipsoids) : point ∈ _bound
 end
 
 @testset "interface - NoBounds, $T, D=$D" for T in [Float32, Float64], D in 1:20

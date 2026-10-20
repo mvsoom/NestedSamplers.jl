@@ -111,22 +111,20 @@ function Base.rand(rng::AbstractRNG, me::MultiEllipsoid)
 end
 
 """
-Returns a random live point and a bounding ellipsoid, since MultiEllipsoid doesn't have
-valid transformation axes
+Returns a random live point and one of the ellipsoids, whose axes set the scale of walk and
+slice proposals (a MultiEllipsoid has no single set of axes), or `nothing` if the point lies
+outside all ellipsoids.
+
+The ellipsoid is chosen at random in proportion to its volume, independently of the point.
+Choosing an ellipsoid that contains the point makes the proposal depend on where it starts,
+so it is no longer symmetric and the walk does not leave the uniform distribution
+invariant (dynesty issue #364).
 """
 function rand_live(rng::AbstractRNG, me::MultiEllipsoid, us)
     idx = rand(rng, Base.axes(us, 2))
     u = us[:, idx]
-
-    # find which Ellipsoid/s it overlaps with
-    idxs = findall(ell -> u ∈ ell, me.ellipsoids)
-    # TODO if point isn't bounded, update bounds
-    if isempty(idxs)
-        return u, nothing
-    end
-
-    # pick random encompassing ellipsoid
-    idx = rand(rng, idxs)
-
-    return u, me.ellipsoids[idx]
+    u ∈ me || return u, nothing
+    length(me) == 1 && return u, me.ellipsoids[1]
+    vols = volume.(me.ellipsoids)
+    return u, me.ellipsoids[rand(rng, Categorical(vols ./ sum(vols)))]
 end
