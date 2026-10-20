@@ -68,14 +68,9 @@ function step(rng, model, sampler::Nested, state; kwargs...)
 
     # sample a new live point using bounds and proposal
     if has_bounds
-        point, bound = rand_live(rng, active_bound, state.us)
-        if isnothing(bound)
-            # live point not inside active bounds: refit them
-            active_bound = Bounds.scale!(Bounds.fit(sampler.bounds, state.us, pointvol=pointvol), sampler.enlarge)
-            since_update = 0
-            point, bound = rand_live(rng, active_bound, point[:, :])
-        end
-        u, v, logl, nc = sampler.proposal(rng, point, logl_dead, bound, model)
+        u, v, logl, nc, active_bound, refit = propose(rng, sampler.proposal, sampler, active_bound,
+                                                      state.us, u_dead, logl_dead, model, pointvol)
+        refit && (since_update = 0)
     else
         point = rand(rng, eltype(state.us), sampler.ndims)
         bound = Bounds.fit(Bounds.NoBounds, state.us)
@@ -166,6 +161,33 @@ function bundle_samples(samples,
 end
 
 ## Helpers
+
+"""
+    propose(rng, proposal, sampler, bound, us, u_dead, logl_dead, model, pointvol)
+        -> (u, v, logl, ncall, bound, refit)
+
+Draw a replacement for the dead point with `proposal` inside `bound`. Returns the new point
+in unit and prior space, its log-likelihood, the number of likelihood calls, and the bound,
+which is refitted (`refit = true`) when the start point of an MCMC proposal lies outside it.
+"""
+function propose(rng, proposal::Proposals.Rejection, sampler, bound, us, u_dead, logl_dead, model, pointvol)
+    # Rejection sampling draws uniformly from the whole bound: for `MultiEllipsoid`, the union
+    # of the ellipsoids, with the 1/q overlap correction in `rand`. It needs no start point.
+    u, v, logl, nc = proposal(rng, u_dead, logl_dead, bound, model)
+    return u, v, logl, nc, bound, false
+end
+
+function propose(rng, proposal, sampler, bound, us, u_dead, logl_dead, model, pointvol)
+    point, prop_bound = rand_live(rng, bound, us)
+    refit = isnothing(prop_bound)
+    if refit
+        # live point not inside active bounds: refit them
+        bound = Bounds.scale!(Bounds.fit(sampler.bounds, us, pointvol=pointvol), sampler.enlarge)
+        point, prop_bound = rand_live(rng, bound, point[:, :])
+    end
+    u, v, logl, nc = proposal(rng, point, logl_dead, prop_bound, model)
+    return u, v, logl, nc, bound, refit
+end
 
 init_particles(rng, ndims, nactive, model) =
     init_particles(rng, Float64, ndims, nactive, model)
