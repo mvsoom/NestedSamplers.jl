@@ -114,7 +114,7 @@ function bundle_samples(samples,
     if add_live
         samples, state = add_live_points(samples, model, sampler, state)
     end
-    vals = mapreduce(t -> hcat(t.v..., exp(t.logwt - state.logz)), vcat, samples)
+    vals = samples_matrix(samples, state.logz)
 
     if check_wsum
         wsum = sum(vals[:, end, 1])
@@ -144,7 +144,7 @@ function bundle_samples(samples,
         samples, state = add_live_points(samples, model, sampler, state)
     end
 
-    vals = mapreduce(t -> hcat(t.v..., exp(t.logwt - state.logz)), vcat, samples)
+    vals = samples_matrix(samples, state.logz)
 
     if check_wsum
         wsum = sum(vals[:, end])
@@ -157,6 +157,21 @@ function bundle_samples(samples,
 end
 
 ## Helpers
+
+# One row per sample: the parameters `v` and the normalized posterior weight. Filled in place;
+# `mapreduce(hcat, vcat, samples)` copied the growing matrix for every row, which took most of
+# the sampler's time for cheap likelihoods.
+function samples_matrix(samples, logz)
+    v1 = first(samples).v
+    vals = Matrix{promote_type(eltype(v1), typeof(logz))}(undef, length(samples), length(v1) + 1)
+    for (i, t) in enumerate(samples)
+        for (j, x) in enumerate(t.v)
+            vals[i, j] = x
+        end
+        vals[i, end] = exp(t.logwt - logz)
+    end
+    return vals
+end
 
 xlogx(x) = iszero(x) ? zero(x) : x * log(x)
 

@@ -8,6 +8,11 @@
     val_arr, _ = sample(rng, model, spl; dlogz=0.2, chain_type=Array)
 
     @test size(chains, 2) == size(val_arr, 2)
+    # one row per dead and final live point: parameters, then weights summing to one
+    vals, st = sample(StableRNG(4), model, spl; dlogz=0.2, chain_type=Array, progress=false)
+    @test size(vals) == (st.it, 2)
+    @test sum(vals[:, end]) ≈ 1
+    @test all(x -> -1 < x < 1, vals[:, 1])
 
     # test with add_live = false
     chains2, _ = sample(rng, model, spl; add_live=false, dlogz=0.2, param_names=["x"], chain_type=Chains)
