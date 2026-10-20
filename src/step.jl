@@ -48,15 +48,16 @@ function step(rng, model, sampler::Nested, state; kwargs...)
         active_bound = Bounds.scale!(Bounds.fit(sampler.bounds, state.us, pointvol=pointvol), sampler.enlarge)
         since_update = 0
         has_bounds = true
-    # if accepted first update, is it time to update again?
-    elseif iszero(state.since_update % sampler.update_interval)
+    # if accepted first update, is it time to update again? `since_update` counts likelihood
+    # calls, which grow by more than one per iteration, so compare rather than test divisibility.
+    elseif state.has_bounds && state.since_update ≥ sampler.update_interval
         @debug "Updating bounds: it=$(state.it), ncall=$(state.ncall), eff=$(state.it / state.ncall)"
         active_bound = Bounds.scale!(Bounds.fit(sampler.bounds, state.us, pointvol=pointvol), sampler.enlarge)
         since_update = 0
         has_bounds = true
     else
         active_bound = state.active_bound
-        since_update = state.since_update + 1
+        since_update = state.since_update
         has_bounds = state.has_bounds
     end
 

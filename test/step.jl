@@ -50,3 +50,24 @@ struct StartRecorder <: Proposals.AbstractProposal end
     # start point: axes that depend on the start point break detailed balance (dynesty #364)
     @test count(d -> d[2] === big, draws) / n ≈ 0.8 atol = 0.03
 end
+
+@testset "bounds are refitted every update_interval calls" begin
+    # `since_update % update_interval == 0` rarely held once iterations cost more than one call,
+    # so bounds went stale (one run: 406 143 calls between refits for an interval of 600) and
+    # could be fitted before the min_ncall / min_eff criteria were met.
+    model, _ = Models.CorrelatedGaussian(3)
+    spl = Nested(3, 200; proposal=Proposals.Rejection())
+    srng = StableRNG(2)
+    _, state = AbstractMCMC.step(srng, model, spl)
+    first_ncall, last, gaps, prev = 0, 0, Int[], nothing
+    for _ in 1:3000
+        _, state = AbstractMCMC.step(srng, model, spl, state)
+        if state.has_bounds && state.active_bound !== prev
+            first_ncall == 0 ? (first_ncall = state.ncall) : push!(gaps, state.ncall - last)
+            last, prev = state.ncall, state.active_bound
+        end
+    end
+    @test first_ncall > spl.min_ncall
+    @test length(gaps) ≥ 10
+    @test maximum(gaps) < spl.update_interval + 100   # one iteration costs far fewer calls here
+end
